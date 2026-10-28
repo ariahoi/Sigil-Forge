@@ -2,25 +2,23 @@
 (() => {
 "use strict";
 
-const { build, newSeed } = SigilGen;
+const { build, newSeed, sanitizeParams, DEFAULTS, RANGES } = SigilGen;
 const { STYLES, paint, toSVG } = SigilRender;
 
 const SYMS = [["mirror","Зеркало"],["r3","×3"],["r4","×4"],["r5","×5"],["r6","×6"],["r8","×8"],["none","Нет"]];
 const SLIDERS = [
-  ["density", "Плотность", 3, 16, 1, v => v],
-  ["spikes",  "Шипы",      0, 100, 1, v => v + "%"],
-  ["curl",    "Завитки",   0, 100, 1, v => v + "%"],
-  ["chaos",   "Хаос",      0, 100, 1, v => v + "%"],
-  ["weight",  "Толщина",   40, 220, 5, v => v + "%"],
+  ["density", "Плотность", 1, v => v],
+  ["spikes",  "Шипы",      1, v => v + "%"],
+  ["curl",    "Завитки",   1, v => v + "%"],
+  ["chaos",   "Хаос",      1, v => v + "%"],
+  ["weight",  "Толщина",   5, v => v + "%"],
 ];
-const DEFAULTS = { density: 8, spikes: 55, curl: 60, chaos: 45, weight: 100, sym: "mirror", style: "chrome",
-                   spine: true, orbits: true, sparks: true, transparent: false };
 
 /* ---------- state ---------- */
 const $ = s => document.querySelector(s);
 const cv = $("#cv"), ctx = cv.getContext("2d"), frame = $("#frame");
 let P = { ...DEFAULTS };
-try { const saved = JSON.parse(localStorage.getItem("sigil-forge-params") || "null"); if (saved) P = { ...DEFAULTS, ...saved }; } catch (e) {}
+try { const saved = JSON.parse(localStorage.getItem("sigil-forge-params") || "null"); if (saved) P = sanitizeParams(saved, Object.keys(STYLES)); } catch (e) {}
 let seed = newSeed(), variant = 0, model = null, history = [], anim = 0, animStart = 0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -119,8 +117,8 @@ chipGroup($("#symChips"), SYMS, "sym");
 chipGroup($("#styleChips"), Object.entries(STYLES).map(([k, s]) => [k, s.name]), "style", v => STYLES[v].sw);
 
 const sliderBox = $("#sliders");
-for (const [key, label, min, max, step, fmt] of SLIDERS) {
-  const wrap = document.createElement("div"); wrap.className = "slider";
+for (const [key, label, step, fmt] of SLIDERS) {
+  const [min, max] = RANGES[key], wrap = document.createElement("div"); wrap.className = "slider";
   wrap.innerHTML = `<label for="s-${key}">${label}</label><output id="o-${key}" for="s-${key}"></output>` +
     `<input type="range" id="s-${key}" min="${min}" max="${max}" step="${step}">`;
   sliderBox.appendChild(wrap);
@@ -134,7 +132,7 @@ for (const [id, key] of Object.entries(TOGGLES)) {
 }
 
 function syncControls() {
-  for (const [key, , , , , fmt] of SLIDERS) { $("#s-" + key).value = P[key]; $("#o-" + key).textContent = fmt(P[key]); }
+  for (const [key, , , fmt] of SLIDERS) { $("#s-" + key).value = P[key]; $("#o-" + key).textContent = fmt(P[key]); }
   for (const [id, key] of Object.entries(TOGGLES)) $("#" + id).checked = !!P[key];
   document.querySelectorAll("#symChips .chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.val === P.sym));
   document.querySelectorAll("#styleChips .chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.val === P.style));

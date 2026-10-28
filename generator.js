@@ -2,6 +2,32 @@
 (function (root) {
 "use strict";
 
+/* ---------- parameters ---------- */
+const DEFAULTS = { mode: "blades", density: 8, spikes: 55, curl: 60, chaos: 45, weight: 100, sym: "mirror", style: "chrome",
+                   spine: true, orbits: true, sparks: true, transparent: false };
+const RANGES = { density: [3, 16], spikes: [0, 100], curl: [0, 100], chaos: [0, 100], weight: [40, 220] };
+const SYM_KEYS = ["mirror", "r3", "r4", "r5", "r6", "r8", "none"];
+const MODES = ["blades", "filigree"];
+const MAX_STROKES = 1800;
+const FIT_R = .96;
+
+// Repairs params from storage or an older version: unknown keys fall back to defaults, numbers are clamped.
+function sanitizeParams(raw, styleKeys) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const P = { ...DEFAULTS };
+  for (const [key, [lo, hi]] of Object.entries(RANGES)) {
+    const v = src[key];
+    if (typeof v === "number" && Number.isFinite(v)) P[key] = Math.min(hi, Math.max(lo, v));
+  }
+  if (MODES.includes(src.mode)) P.mode = src.mode;
+  if (SYM_KEYS.includes(src.sym)) P.sym = src.sym;
+  if (styleKeys.includes(src.style)) P.style = src.style;
+  for (const key of ["spine", "orbits", "sparks", "transparent"]) if (key in src) P[key] = !!src[key];
+  return P;
+}
+
+const heroCount = density => 2 + Math.round((density - 3) / 13 * 3);
+
 /* ---------- seeded randomness ---------- */
 function xmur3(str) {
   let h = 1779033703 ^ str.length;
@@ -38,15 +64,76 @@ const PROF = {
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 const SPEED = .55;
 
-// Builds one symmetry cell ("motif"). Main structure draws from R, branches and thorns from D,
-// so a mutation (new variant → new D) keeps the skeleton and regrows the barbs.
-function buildMotif(seed, variant, P) {
-  const R = rngFrom(seed), D = rngFrom(seed + "/" + variant);
-  const chaos = P.chaos / 100, curl = P.curl / 100, spikes = P.spikes / 100, wk = P.weight / 100;
-  const radial = P.sym[0] === "r", folds = radial ? +P.sym.slice(1) : 1, free = P.sym === "none";
-  const out = [];
+// A guide is a cubic Bézier the composers align strokes to, so lines share one flow.
+function makeGuide(p0, p1, p2, p3) {
+  const at = t => {
+    const u = 1 - t, a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+    return [a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0], a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1]];
+  };
+  const dir = t => {
+    const u = 1 - t, a = 3 * u * u, b = 6 * u * t, c = 3 * t * t;
+    const dx = a * (p1[0] - p0[0]) + b * (p2[0] - p1[0]) + c * (p3[0] - p2[0]);
+    const dy = a * (p1[1] - p0[1]) + b * (p2[1] - p1[1]) + c * (p3[1] - p2[1]);
+    return Math.atan2(dy, dx);
+  };
+  const samples = [];
+  for (let i = 0; i <= 64; i++) samples.push(at(i / 64));
+  const nearest = (x, y) => {
+    let best = 0, bd = Infinity;
+    samples.forEach(([sx, sy], i) => { const d = (sx - x) ** 2 + (sy - y) ** 2; if (d < bd) { bd = d; best = i; } });
+    return best / 64;
+  };
+  return { at, dir, nearest };
+}
 
-  function bent(r, x0, y0, x1, y1, w, prof, t0, dur, n, bend) {
+function makeGuides(k) {
+  const { R } = k, n = R.int(1, 2), out = [];
+  for (let g = 0; g < n; g++) {
+    const type = ["rise", "fall", "loop"][R.int(0, 2)];
+    let p0, p1, p2, p3;
+    if (k.radial) {
+      const span = Math.PI / k.folds, a3 = -Math.PI / 2 + R.range(.3, .9) * span, r3 = R.range(.6, .88);
+      p0 = [R.range(0, .03), -R.range(.08, .3)];
+      p3 = [Math.cos(a3) * r3, Math.sin(a3) * r3];
+      p1 = [p0[0] + R.range(0, .08), p0[1] - R.range(.15, .35)];
+      p2 = type === "loop" ? [p3[0] * .2, p3[1] * R.range(.6, .9)] : [p3[0] * R.range(.5, .9), p3[1] * R.range(.5, .8)];
+    } else if (k.free) {
+      p0 = [R.range(-.4, .4), R.range(-.4, .4)];
+      p1 = [R.range(-.7, .7), R.range(-.7, .7)];
+      p2 = [R.range(-.7, .7), R.range(-.7, .7)];
+      p3 = [R.range(-.8, .8), R.range(-.8, .8)];
+    } else {
+      const up = type === "rise" ? -1 : type === "fall" ? 1 : R.sign();
+      p0 = [R.range(0, .06), R.range(-.7, .7)];
+      p3 = [R.range(.35, .8), type === "loop" ? R.range(-.4, .4) : up * R.range(.3, .85)];
+      p1 = [p0[0] + R.range(.1, .35), p0[1] - up * R.range(.1, .35)];
+      p2 = type === "loop" ? [R.range(0, .15), p3[1] + R.range(-.3, .3)] : [p3[0] - R.range(0, .25), p3[1] - up * R.range(.15, .4)];
+    }
+    out.push(makeGuide(p0, p1, p2, p3));
+  }
+  return out;
+}
+
+// The kit holds the primitives both composers draw with. R shapes the skeleton, D the details,
+// so a mutation (new variant → new D) keeps the skeleton and regrows the barbs.
+function makeKit(R, D, P) {
+  const radial = P.sym[0] === "r";
+  const k = {
+    R, D, P,
+    chaos: P.chaos / 100, curl: P.curl / 100, spikes: P.spikes / 100, wk: P.weight / 100,
+    radial, folds: radial ? +P.sym.slice(1) : 1, free: P.sym === "none",
+    out: [], counter: {},
+  };
+
+  k.add = (raw, role) => {
+    raw.role = role;
+    raw.motif = k.counter[role] = (k.counter[role] ?? -1) + 1;
+    k.out.push(raw);
+    return raw;
+  };
+  k.main = N => k.radial ? Math.max(1, Math.round(N * 2 / k.folds)) : N;
+
+  k.bent = (x0, y0, x1, y1, w, prof, t0, dur, n, bend, role = "detail") => {
     const mx = (x0 + x1) / 2 - (y1 - y0) * bend, my = (y0 + y1) / 2 + (x1 - x0) * bend;
     const pts = [], ws = [];
     for (let i = 0; i <= n; i++) {
@@ -54,11 +141,19 @@ function buildMotif(seed, variant, P) {
       pts.push([u * u * x0 + 2 * u * t * mx + t * t * x1, u * u * y0 + 2 * u * t * my + t * t * y1]);
       ws.push(w * prof(t));
     }
-    out.push({ pts, ws, t0, dur });
-  }
+    return k.add({ pts, ws, t0, dur }, role);
+  };
 
-  function tendril(r, x, y, ang, len, w, depth, t0, opt = {}) {
-    const prof = opt.prof || PROF.swoosh, ch = opt.chaos ?? chaos, cu = opt.curl ?? curl;
+  // Radial motifs live in the half-sector [0, π/folds] from the up axis; stray steps steer back to its bisector.
+  const sectorPull = (x, y, ang) => {
+    if (!k.radial) return 0;
+    const phi = Math.atan2(x, -y);
+    if (phi >= 0 && phi <= Math.PI / k.folds) return 0;
+    return wrapA(-Math.PI / 2 + Math.PI / (2 * k.folds) - ang) * .12;
+  };
+
+  k.tendril = (r, x, y, ang, len, w, depth, t0, opt = {}) => {
+    const prof = opt.prof || PROF.swoosh, ch = opt.chaos ?? k.chaos, cu = opt.curl ?? k.curl;
     const step = .009, n = Math.max(6, Math.round(len / step));
     const pts = [], ws = [], angs = [];
     let curv = r.range(-1, 1) * .03 * ch;
@@ -68,115 +163,151 @@ function buildMotif(seed, variant, P) {
       pts.push([x, y]); ws.push(w * prof(t)); angs.push(ang);
       curv += r.gauss() * .005 * ch; curv *= .955;
       let c = curv;
-      if (t > 1 - zone) { const k = (t - (1 - zone)) / zone; c += dir * amt * .11 * k * k; }
+      if (t > 1 - zone) { const q = (t - (1 - zone)) / zone; c += dir * amt * .11 * q * q; }
       const rad = Math.hypot(x, y);
       if (rad > .8) c += wrapA(Math.atan2(-y, -x) - ang) * .1 * (rad - .8) / .2;
+      c += sectorPull(x, y, ang);
       ang += c; x += Math.cos(ang) * step; y += Math.sin(ang) * step;
     }
     const dur = (.35 + len * .7) * SPEED;
-    out.push({ pts, ws, t0, dur });
+    k.add({ pts, ws, t0, dur }, opt.role || "detail");
     if (opt.bare) return;
 
+    const D = k.D;
     if (depth < 2) {
-      const nb = Math.round(spikes * len * (depth ? 2.2 : 4) * D.range(.4, 1.2));
+      const nb = Math.round(k.spikes * len * (depth ? 2.2 : 4) * D.range(.4, 1.2));
       for (let b = 0; b < nb; b++) {
         const ti = D.range(.12, .7), i = Math.round(ti * n);
-        tendril(D, pts[i][0], pts[i][1], angs[i] + D.sign() * D.range(.35, 1.15),
-                len * D.range(.22, .5), ws[i] * D.range(.5, .85), depth + 1, t0 + dur * ti);
+        k.tendril(D, pts[i][0], pts[i][1], angs[i] + D.sign() * D.range(.35, 1.15),
+                  len * D.range(.22, .5), ws[i] * D.range(.5, .85), depth + 1, t0 + dur * ti);
       }
     }
-    const nt = Math.round(spikes * len * (depth ? 6 : 11) * D.range(.5, 1.3));
-    for (let k = 0; k < nt; k++) {
+    const nt = Math.round(k.spikes * len * (depth ? 6 : 11) * D.range(.5, 1.3));
+    for (let q = 0; q < nt; q++) {
       const ti = D.range(.08, .85), i = Math.round(ti * n);
       if (ws[i] < .002) continue;
       const side = D.sign(), back = D.chance(.18);
       const a = angs[i] + (back ? Math.PI : 0) + side * (back ? -1 : 1) * D.range(.45, 1.0);
       const L = ws[i] * D.range(1.6, 4.2) + .012;
-      bent(D, pts[i][0], pts[i][1], pts[i][0] + Math.cos(a) * L, pts[i][1] + Math.sin(a) * L,
-           ws[i] * D.range(.75, 1.1), PROF.thorn, t0 + dur * ti, .12, 6, side * D.range(0, .22));
+      k.bent(pts[i][0], pts[i][1], pts[i][0] + Math.cos(a) * L, pts[i][1] + Math.sin(a) * L,
+             ws[i] * D.range(.75, 1.1), PROF.thorn, t0 + dur * ti, .12, 6, side * D.range(0, .22), "barb");
     }
-  }
+  };
 
-  // spine: the axis everything hangs from
-  if (P.spine && !free) {
-    const W = .026 * wk * R.range(.8, 1.3), bul = R.int(2, 5), n = 140, pts = [], ws = [];
-    const y0 = radial ? -.05 : -R.range(.8, .94), y1 = radial ? -R.range(.82, .94) : R.range(.8, .94);
+  // spine: the axis everything hangs from; between bulges it never thins below minW
+  k.spine = (W = .026 * k.wk * R.range(.8, 1.3)) => {
+    const minW = .02 * k.wk, bul = R.int(2, 5), n = 140, pts = [], ws = [];
+    const y0 = k.radial ? -.05 : -R.range(.8, .94), y1 = k.radial ? -R.range(.82, .94) : R.range(.8, .94);
     for (let i = 0; i <= n; i++) {
       const t = i / n;
       pts.push([0, y0 + (y1 - y0) * t]);
-      ws.push(W * Math.pow(Math.sin(Math.PI * t), .6) * (.3 + .7 * Math.pow(Math.abs(Math.cos(Math.PI * t * bul)), 4)));
+      ws.push(Math.pow(Math.sin(Math.PI * t), .6) * Math.max(minW, W * (.3 + .7 * Math.pow(Math.abs(Math.cos(Math.PI * t * bul)), 4))));
     }
-    out.push({ pts, ws, t0: 0, dur: .9 * SPEED });
+    k.add({ pts, ws, t0: 0, dur: .9 * SPEED }, "spine");
     const nd = R.int(1, 3);
-    for (let k = 0; k < nd; k++) {
-      const cy = radial ? -R.range(.2, .75) : R.range(-.6, .6), h = R.range(.05, .16);
-      bent(R, 0, cy - h, 0, cy + h, R.range(.03, .07) * wk, PROF.diamond, .15 + k * .08, .3 * SPEED, 16, 0);
-      if (R.chance(.6)) bent(R, 0, cy, R.range(.08, .26), cy + R.range(-.03, .03), R.range(.008, .016) * wk, PROF.thorn, .3, .25 * SPEED, 14, R.range(-.15, .15));
+    for (let q = 0; q < nd; q++) {
+      const cy = k.radial ? -R.range(.2, .75) : R.range(-.6, .6), h = R.range(.05, .16);
+      k.bent(0, cy - h, 0, cy + h, R.range(.03, .07) * k.wk, PROF.diamond, .15 + q * .08, .3 * SPEED, 16, 0, "spine");
+      if (R.chance(.6)) k.bent(0, cy, R.range(.08, .26), cy + R.range(-.03, .03), R.range(.008, .016) * k.wk, PROF.thorn, .3, .25 * SPEED, 14, R.range(-.15, .15), "spine");
     }
-  }
+  };
+
+  // orbits: broken halo arcs with outward ticks
+  k.orbits = count => {
+    for (let o = 0; o < count; o++) {
+      const rr = R.range(.3, .85);
+      let a0, a1;
+      if (k.radial) { a0 = -Math.PI / 2 + R.range(0, .15); a1 = -Math.PI / 2 + Math.PI / k.folds * R.range(.6, 1); }
+      else if (k.free) { a0 = R.range(-Math.PI, Math.PI); a1 = a0 + R.range(1, 3); }
+      else { a0 = -Math.PI / 2 + R.range(-.05, .5); a1 = Math.min(Math.PI / 2 + .05, a0 + R.range(.6, 2.2)); }
+      const n = 90, pts = [], ws = [], wo = .006 * k.wk * R.range(.6, 1.6);
+      for (let i = 0; i <= n; i++) { const t = i / n, aa = a0 + (a1 - a0) * t; pts.push([Math.cos(aa) * rr, Math.sin(aa) * rr]); ws.push(wo * PROF.hair(t)); }
+      k.add({ pts, ws, t0: .25 + o * .15, dur: .8 * SPEED }, "detail");
+      const nt = R.int(1, 4);
+      for (let q = 0; q < nt; q++) {
+        const aa = a0 + (a1 - a0) * R.range(.15, .85), L = R.range(.03, .09);
+        k.bent(Math.cos(aa) * rr, Math.sin(aa) * rr, Math.cos(aa) * (rr + L), Math.sin(aa) * (rr + L),
+               wo * 2.4, PROF.thorn, .5, .15, 6, R.range(-.1, .1), "detail");
+      }
+    }
+  };
+
+  // spark: a four-point glint
+  k.spark = (x, y, sz, t0) => {
+    const w = sz * .24;
+    k.bent(x, y - sz, x, y + sz, w, PROF.diamond, t0, .2, 12, 0, "detail");
+    k.bent(x - sz * .6, y, x + sz * .6, y, w * .9, PROF.diamond, t0, .2, 12, 0, "detail");
+  };
+  // a random spot inside this motif's region
+  k.spot = (rMin, rMax) => {
+    if (k.radial) { const rr = R.range(rMin, rMax), aa = -Math.PI / 2 + R.range(.05, Math.PI / k.folds); return [Math.cos(aa) * rr, Math.sin(aa) * rr]; }
+    if (k.free) return [R.range(-.85, .85), R.range(-.85, .85)];
+    return [R.range(.12, .85), R.range(-.85, .85)];
+  };
+
+  k.guides = makeGuides(k);
+  return k;
+}
+
+/* ---------- composers ---------- */
+function composeFiligree(k) {
+  const { R, P } = k;
+  if (P.spine && !k.free) k.spine();
 
   // main tendrils
-  const N = radial ? Math.max(2, Math.round(P.density * .55)) : P.density;
+  const N = k.main(P.density);
   for (let i = 0; i < N; i++) {
     let x, y, a, len = R.range(.35, 1.0);
-    const w = R.range(.016, .04) * wk, t0 = i * .06;
-    if (free) {
+    const w = R.range(.016, .04) * k.wk, t0 = i * .06;
+    if (k.free) {
       x = R.range(-.45, .45); y = R.range(-.6, .6); a = R.range(-Math.PI, Math.PI);
-    } else if (radial) {
-      x = R.range(0, .03); y = -R.range(.06, .6); a = -Math.PI / 2 + R.range(.15, Math.min(1.4, Math.PI / folds * 1.7)); len *= .65;
+    } else if (k.radial) {
+      x = R.range(0, .03); y = -R.range(.06, .6); a = -Math.PI / 2 + R.range(.15, Math.min(1.4, Math.PI / k.folds * 1.7)); len *= .65;
     } else if (R.chance(.32)) {
       x = R.range(.06, .38); y = R.range(-.5, .5); a = R.sign() * Math.PI / 2 + R.range(-.45, .45); len *= 1.15;
     } else {
       x = R.range(0, .05); y = R.range(-.78, .78); a = R.range(-1.25, 1.25);
     }
-    tendril(R, x, y, a, len, w, 0, t0);
+    k.tendril(R, x, y, a, len, w, 0, t0);
   }
 
   // hairlines: long thin strands that cut across the mass
   const nh = R.int(1, 3);
   for (let i = 0; i < nh; i++) {
-    const x = free ? R.range(-.3, .3) : R.range(0, .2), y = radial ? -R.range(.1, .5) : R.range(-.4, .4);
-    const a = radial ? -Math.PI / 2 + R.range(.1, Math.PI / folds) : (free ? R.range(-Math.PI, Math.PI) : R.range(-1.4, 1.4));
-    tendril(R, x, y, a, R.range(.5, 1.1) * (radial ? .7 : 1), .0045 * wk * R.range(.7, 1.4), 2, .2 + i * .1,
-            { prof: PROF.hair, chaos: chaos * .4, curl: curl * .5, bare: true });
+    const x = k.free ? R.range(-.3, .3) : R.range(0, .2), y = k.radial ? -R.range(.1, .5) : R.range(-.4, .4);
+    const a = k.radial ? -Math.PI / 2 + R.range(.1, Math.PI / k.folds) : (k.free ? R.range(-Math.PI, Math.PI) : R.range(-1.4, 1.4));
+    k.tendril(R, x, y, a, R.range(.5, 1.1) * (k.radial ? .7 : 1), .0045 * k.wk * R.range(.7, 1.4), 2, .2 + i * .1,
+              { prof: PROF.hair, chaos: k.chaos * .4, curl: k.curl * .5, bare: true });
   }
 
-  // orbits: broken halo arcs with outward ticks
-  if (P.orbits) {
-    const no = R.int(1, 2);
-    for (let o = 0; o < no; o++) {
-      const rr = R.range(.3, .85);
-      let a0, a1;
-      if (radial) { a0 = -Math.PI / 2 + R.range(0, .15); a1 = -Math.PI / 2 + Math.PI / folds * R.range(.6, 1); }
-      else if (free) { a0 = R.range(-Math.PI, Math.PI); a1 = a0 + R.range(1, 3); }
-      else { a0 = -Math.PI / 2 + R.range(-.05, .5); a1 = Math.min(Math.PI / 2 + .05, a0 + R.range(.6, 2.2)); }
-      const n = 90, pts = [], ws = [], wo = .006 * wk * R.range(.6, 1.6);
-      for (let i = 0; i <= n; i++) { const t = i / n, aa = a0 + (a1 - a0) * t; pts.push([Math.cos(aa) * rr, Math.sin(aa) * rr]); ws.push(wo * PROF.hair(t)); }
-      out.push({ pts, ws, t0: .25 + o * .15, dur: .8 * SPEED });
-      const nt = R.int(1, 4);
-      for (let k = 0; k < nt; k++) {
-        const aa = a0 + (a1 - a0) * R.range(.15, .85), L = R.range(.03, .09);
-        bent(R, Math.cos(aa) * rr, Math.sin(aa) * rr, Math.cos(aa) * (rr + L), Math.sin(aa) * (rr + L),
-             wo * 2.4, PROF.thorn, .5, .15, 6, R.range(-.1, .1));
-      }
-    }
-  }
-
-  // sparks: four-point glints
+  if (P.orbits) k.orbits(R.int(1, 2));
   if (P.sparks) {
     const ns = R.int(2, 6);
     for (let s = 0; s < ns; s++) {
-      let x, y;
-      if (radial) { const rr = R.range(.25, .88), aa = -Math.PI / 2 + R.range(.05, Math.PI / folds); x = Math.cos(aa) * rr; y = Math.sin(aa) * rr; }
-      else if (free) { x = R.range(-.85, .85); y = R.range(-.85, .85); }
-      else { x = R.range(.12, .85); y = R.range(-.85, .85); }
+      const [x, y] = k.spot(.25, .88);
       if (Math.hypot(x, y) > .92) continue;
-      const sz = R.range(.025, .085), w = sz * .24, t0 = .4 + s * .07;
-      bent(R, x, y - sz, x, y + sz, w, PROF.diamond, t0, .2, 12, 0);
-      bent(R, x - sz * .6, y, x + sz * .6, y, w * .9, PROF.diamond, t0, .2, 12, 0);
+      k.spark(x, y, R.range(.025, .085), .4 + s * .07);
     }
   }
-  return out;
+}
+
+const COMPOSERS = { filigree: composeFiligree, blades: composeFiligree };
+
+/* ---------- assembly ---------- */
+const copiesOf = sym => sym === "none" ? 1 : sym === "mirror" ? 2 : 2 * +sym.slice(1);
+const polyLength = pts => { let L = 0; for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return L; };
+
+// Trims the motif before symmetry, so every dropped barb loses all of its copies at once.
+function capMotif(motif, copies) {
+  const allowed = Math.floor(MAX_STROKES / copies);
+  if (motif.length <= allowed) return motif;
+  let excess = motif.length - allowed;
+  const drop = new Set();
+  for (const role of ["barb", "detail"]) {
+    const pool = motif.filter(s => s.role === role).map(s => [s, polyLength(s.pts)]).sort((a, b) => a[1] - b[1]);
+    for (const [s] of pool) { if (!excess) break; drop.add(s); excess--; }
+  }
+  return motif.filter(s => !drop.has(s));
 }
 
 function applySymmetry(motif, sym) {
@@ -201,18 +332,31 @@ function prepare(st) {
     const dx = p[2 * b] - p[2 * a], dy = p[2 * b + 1] - p[2 * a + 1], l = Math.hypot(dx, dy) || 1;
     nx[i] = -dy / l; ny[i] = dx / l;
   }
-  return { n, p, nx, ny, w: Float32Array.from(st.ws), t0: st.t0, dur: Math.max(.05, st.dur), flip: !!st.flip };
+  return { n, p, nx, ny, w: Float32Array.from(st.ws), t0: st.t0, dur: Math.max(.05, st.dur), flip: !!st.flip,
+           role: st.role, motif: st.motif };
+}
+
+// Uniformly shrinks the model when any outline edge reaches past FIT_R; returns the factor.
+function fitToFrame(strokes) {
+  let maxR = 0;
+  for (const s of strokes) for (let i = 0; i < s.n; i++) maxR = Math.max(maxR, Math.hypot(s.p[2 * i], s.p[2 * i + 1]) + s.w[i] / 2);
+  if (maxR <= FIT_R) return 1;
+  const scale = FIT_R / maxR;
+  for (const s of strokes) { for (let i = 0; i < s.p.length; i++) s.p[i] *= scale; for (let i = 0; i < s.n; i++) s.w[i] *= scale; }
+  return scale;
 }
 
 function build(seed, variant, P) {
-  const strokes = applySymmetry(buildMotif(seed, variant, P), P.sym).map(prepare);
+  const k = makeKit(rngFrom(seed), rngFrom(seed + "/" + variant), P);
+  (COMPOSERS[P.mode] || composeFiligree)(k);
+  const strokes = applySymmetry(capMotif(k.out, copiesOf(P.sym)), P.sym).map(prepare);
+  const scale = fitToFrame(strokes);
   let end = 0;
   for (const s of strokes) end = Math.max(end, s.t0 + s.dur);
-  return { strokes, end };
+  return { strokes, end, scale };
 }
 
-
-const SigilGen = { build, newSeed, prepare };
+const SigilGen = { build, newSeed, prepare, sanitizeParams, heroCount, DEFAULTS, RANGES, SYM_KEYS, MODES, MAX_STROKES };
 root.SigilGen = SigilGen;
 if (typeof module !== "undefined") module.exports = SigilGen;
 })(typeof window !== "undefined" ? window : globalThis);
