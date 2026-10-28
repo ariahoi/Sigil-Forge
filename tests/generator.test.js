@@ -40,3 +40,29 @@ test("sanitizeParams repairs old and broken saved params", () => {
   assert.equal(p.mode, "blades"); assert.equal(p.density, 8); assert.equal(p.weight, 220);
   assert.equal(p.style, "chrome"); assert.equal(p.sym, "mirror"); assert.equal(p.spine, false);
 });
+
+const BL = { ...P0, mode: "blades" };
+const heroes = m => m.strokes.filter(s => s.role === "hero");
+
+test("blades: 2–5 heroes per half, matching heroCount, with echoes", () => {
+  for (const density of [3, 8, 16]) for (const seed of SEEDS) {
+    const m = G.build(seed, 0, { ...BL, density });
+    assert.equal(heroes(m).length / 2, G.heroCount(density));
+    assert.ok(m.strokes.some(s => s.role === "echo"));
+  }
+});
+test("blades: mutation keeps heroes (up to fit scale)", () => {
+  for (const seed of SEEDS) {
+    const a = G.build(seed, 0, BL), b = G.build(seed, 1, BL);
+    const norm = m => heroes(m).map(s => [s.motif, [...s.p].map(v => v / m.scale), [...s.w].map(v => v / m.scale)]);
+    const A = norm(a), B = norm(b);
+    assert.equal(A.length, B.length);
+    A.forEach((h, i) => { assert.equal(h[0], B[i][0]); h[1].forEach((v, j) => assert.ok(Math.abs(v - B[i][1][j]) < 1e-5)); });
+  }
+});
+test("blades: extremes of curl and weight stay finite", () => {
+  for (const curl of [0, 100]) for (const weight of [40, 220]) {
+    const m = G.build("HC8Q-5UEN", 0, { ...BL, curl, weight });
+    assert.ok(m.strokes.every(s => [...s.p, ...s.w].every(Number.isFinite)));
+  }
+});

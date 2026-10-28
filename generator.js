@@ -60,6 +60,7 @@ const PROF = {
   thorn:   t => Math.pow(1 - t, 1.15),
   diamond: t => 1 - Math.abs(2 * t - 1),
   hair:    t => Math.pow(Math.sin(Math.PI * t), .5),
+  blade:   t => t < .3 ? Math.pow(t / .3, .7) : Math.pow((1 - t) / .7, 1.4),
 };
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 const SPEED = .55;
@@ -83,7 +84,13 @@ function makeGuide(p0, p1, p2, p3) {
     samples.forEach(([sx, sy], i) => { const d = (sx - x) ** 2 + (sy - y) ** 2; if (d < bd) { bd = d; best = i; } });
     return best / 64;
   };
-  return { at, dir, nearest };
+  return { at, dir, nearest, cps: [p0, p1, p2, p3] };
+}
+
+// A sibling of a guide: same shape family, scaled about its start, shifted and sometimes flipped vertically.
+function guideVariant(R, g) {
+  const [o] = g.cps, s = R.range(.7, 1.25), dy = R.sign() * R.range(.2, .45), flip = R.chance(.4) ? -1 : 1;
+  return makeGuide(...g.cps.map(([x, y]) => [o[0] + (x - o[0]) * s, o[1] + dy + flip * (y - o[1]) * s]));
 }
 
 function makeGuides(k) {
@@ -105,7 +112,7 @@ function makeGuides(k) {
     } else {
       const up = type === "rise" ? -1 : type === "fall" ? 1 : R.sign();
       p0 = [R.range(0, .06), R.range(-.7, .7)];
-      p3 = [R.range(.35, .8), type === "loop" ? R.range(-.4, .4) : up * R.range(.3, .85)];
+      p3 = [R.range(.5, .88), type === "loop" ? R.range(-.4, .4) : up * R.range(.4, .9)];
       p1 = [p0[0] + R.range(.1, .35), p0[1] - up * R.range(.1, .35)];
       p2 = type === "loop" ? [R.range(0, .15), p3[1] + R.range(-.3, .3)] : [p3[0] - R.range(0, .25), p3[1] - up * R.range(.15, .4)];
     }
@@ -195,7 +202,7 @@ function makeKit(R, D, P) {
   };
 
   // spine: the axis everything hangs from; between bulges it never thins below minW
-  k.spine = (W = .026 * k.wk * R.range(.8, 1.3)) => {
+  k.spine = (W = .026 * k.wk * R.range(.8, 1.3), ornaments) => {
     const minW = .02 * k.wk, bul = R.int(2, 5), n = 140, pts = [], ws = [];
     const y0 = k.radial ? -.05 : -R.range(.8, .94), y1 = k.radial ? -R.range(.82, .94) : R.range(.8, .94);
     for (let i = 0; i <= n; i++) {
@@ -204,7 +211,7 @@ function makeKit(R, D, P) {
       ws.push(Math.pow(Math.sin(Math.PI * t), .6) * Math.max(minW, W * (.3 + .7 * Math.pow(Math.abs(Math.cos(Math.PI * t * bul)), 4))));
     }
     k.add({ pts, ws, t0: 0, dur: .9 * SPEED }, "spine");
-    const nd = R.int(1, 3);
+    const nd = ornaments ?? R.int(1, 3);
     for (let q = 0; q < nd; q++) {
       const cy = k.radial ? -R.range(.2, .75) : R.range(-.6, .6), h = R.range(.05, .16);
       k.bent(0, cy - h, 0, cy + h, R.range(.03, .07) * k.wk, PROF.diamond, .15 + q * .08, .3 * SPEED, 16, 0, "spine");
@@ -212,17 +219,21 @@ function makeKit(R, D, P) {
     }
   };
 
-  // orbits: broken halo arcs with outward ticks
-  k.orbits = count => {
+  // orbits: halo arcs with outward ticks; with `gap` each arc is split once
+  k.orbits = (count, gap = false) => {
     for (let o = 0; o < count; o++) {
       const rr = R.range(.3, .85);
       let a0, a1;
       if (k.radial) { a0 = -Math.PI / 2 + R.range(0, .15); a1 = -Math.PI / 2 + Math.PI / k.folds * R.range(.6, 1); }
       else if (k.free) { a0 = R.range(-Math.PI, Math.PI); a1 = a0 + R.range(1, 3); }
       else { a0 = -Math.PI / 2 + R.range(-.05, .5); a1 = Math.min(Math.PI / 2 + .05, a0 + R.range(.6, 2.2)); }
-      const n = 90, pts = [], ws = [], wo = .006 * k.wk * R.range(.6, 1.6);
-      for (let i = 0; i <= n; i++) { const t = i / n, aa = a0 + (a1 - a0) * t; pts.push([Math.cos(aa) * rr, Math.sin(aa) * rr]); ws.push(wo * PROF.hair(t)); }
-      k.add({ pts, ws, t0: .25 + o * .15, dur: .8 * SPEED }, "detail");
+      const wo = .006 * k.wk * R.range(.6, 1.6), cut = gap ? R.range(.35, .65) : null;
+      const spans = cut === null ? [[0, 1]] : [[0, cut - .04], [cut + .04, 1]];
+      for (const [s0, s1] of spans) {
+        const n = Math.max(8, Math.round(90 * (s1 - s0))), pts = [], ws = [];
+        for (let i = 0; i <= n; i++) { const t = i / n, aa = a0 + (a1 - a0) * (s0 + (s1 - s0) * t); pts.push([Math.cos(aa) * rr, Math.sin(aa) * rr]); ws.push(wo * PROF.hair(t)); }
+        k.add({ pts, ws, t0: .25 + o * .15, dur: .8 * SPEED * (s1 - s0) }, "detail");
+      }
       const nt = R.int(1, 4);
       for (let q = 0; q < nt; q++) {
         const aa = a0 + (a1 - a0) * R.range(.15, .85), L = R.range(.03, .09);
@@ -291,7 +302,107 @@ function composeFiligree(k) {
   }
 }
 
-const COMPOSERS = { filigree: composeFiligree, blades: composeFiligree };
+// Direction of the polyline at i and the side (+1 / −1 along the left normal) facing away from its bend.
+const headingAt = (pts, i) => {
+  const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+  return Math.atan2(b[1] - a[1], b[0] - a[0]);
+};
+const outerSide = (pts, i, span = 5) => {
+  const a = pts[Math.max(0, i - span)], b = pts[i], c = pts[Math.min(pts.length - 1, i + span)];
+  const turn = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+  return turn > 0 ? -1 : 1;
+};
+
+// One hero: a thick blade laid along a guide, built from R only.
+function heroBlade(k, guide, h) {
+  const { R } = k;
+  const off = R.range(-.06, .06);
+  const tA = R.range(0, .15), tB = R.range(.8, 1);
+  const a1 = R.range(4, 9), a2 = R.range(9, 17), f1 = R.range(0, 6.28), f2 = R.range(0, 6.28);
+  const w = R.range(.05, .09) * k.wk;
+  const pts = [], n = 70;
+  for (let i = 0; i <= n; i++) {
+    const t = tA + (tB - tA) * i / n, [x, y] = guide.at(t), nrm = guide.dir(t) + Math.PI / 2;
+    const d = off + k.chaos * .06 * (Math.sin(a1 * t + f1) + .5 * Math.sin(a2 * t + f2));
+    pts.push([x + Math.cos(nrm) * d, y + Math.sin(nrm) * d]);
+  }
+  if (R.chance(k.curl)) {
+    const step = .009, steps = Math.round(polyLength(pts) * R.range(.15, .25) / step), turn = R.sign() * k.curl * .15;
+    let [x, y] = pts[n], ang = headingAt(pts, n);
+    for (let j = 0; j < steps; j++) { ang += turn; x += Math.cos(ang) * step; y += Math.sin(ang) * step; pts.push([x, y]); }
+  }
+  const ws = pts.map((_, i) => w * PROF.blade(i / (pts.length - 1)));
+  return k.add({ pts, ws, t0: h * .12, dur: (.5 + polyLength(pts) * .6) * SPEED }, "hero");
+}
+
+// Echoes, swept-back barbs and forks for one hero, built from D only.
+function bladeDetails(k, hero) {
+  const { D } = k, { pts, ws, t0, dur } = hero, n = pts.length - 1;
+  const side = outerSide(pts, Math.round(n / 2), Math.round(n / 4));
+  const wMax = Math.max(...ws);
+
+  const ne = D.int(1, 3);
+  for (let e = 0; e < ne; e++) {
+    const gapOut = [.025, .045, .07][e], wf = D.range(.25, .4);
+    const i0 = Math.round(n * D.range(.1, .25)), i1 = n - Math.round(n * D.range(.1, .25));
+    const ep = [], ew = [];
+    for (let i = i0; i <= i1; i++) {
+      const nrm = headingAt(pts, i) + Math.PI / 2, d = side * (ws[i] / 2 + gapOut);
+      ep.push([pts[i][0] + Math.cos(nrm) * d, pts[i][1] + Math.sin(nrm) * d]);
+      ew.push(wMax * wf * Math.pow(Math.max(0, Math.sin(Math.PI * (i - i0) / (i1 - i0))), .7));
+    }
+    k.add({ pts: ep, ws: ew, t0: t0 + .1 + e * .05, dur }, "echo");
+  }
+
+  const nb = Math.round(k.spikes * 4 * D());
+  for (let b = 0; b < nb; b++) {
+    const ti = D.range(.15, .75), i = Math.round(ti * n), ang = headingAt(pts, i), s = outerSide(pts, i);
+    const nrm = ang + Math.PI / 2, base = s * ws[i] / 2 * .6;
+    const x0 = pts[i][0] + Math.cos(nrm) * base, y0 = pts[i][1] + Math.sin(nrm) * base;
+    const a = ang + Math.PI - s * D.range(20, 40) * Math.PI / 180, L = D.range(.08, .2);
+    const hook = D.chance(.3);
+    k.bent(x0, y0, x0 + Math.cos(a) * L, y0 + Math.sin(a) * L, Math.max(ws[i] * .5, .01 * k.wk), PROF.thorn,
+           t0 + dur * ti, .18, 10, -s * (hook ? D.range(.25, .4) : D.range(0, .12)), "barb");
+  }
+
+  const nf = D.int(0, 2);
+  for (let f = 0; f < nf; f++) {
+    const i = Math.round(n * D.range(.8, .95)), a = headingAt(pts, i) + D.sign() * D.range(.15, .4), L = D.range(.08, .18);
+    k.bent(pts[i][0], pts[i][1], pts[i][0] + Math.cos(a) * L, pts[i][1] + Math.sin(a) * L,
+           ws[i] * .8 + .004 * k.wk, PROF.thorn, t0 + dur * .85, .15, 10, D.range(-.15, .15), "detail");
+  }
+}
+
+// The emptiest of 12 candidate spots, measured against every point placed so far.
+function freeSpot(k) {
+  const probe = [];
+  for (const s of k.out) for (let i = 0; i < s.pts.length; i += 4) probe.push(s.pts[i]);
+  let best = null, bestD = -1;
+  for (let c = 0; c < 12; c++) {
+    const [x, y] = k.spot(.2, .88);
+    let d = Infinity;
+    for (const [px, py] of probe) d = Math.min(d, (px - x) ** 2 + (py - y) ** 2);
+    if (d > bestD) { bestD = d; best = [x, y]; }
+  }
+  return best;
+}
+
+function composeBlades(k) {
+  const { R, P } = k;
+  if (P.spine && !k.free) k.spine(R.range(.035, .05) * k.wk, 1);
+  const H = k.main(heroCount(P.density)), G = k.guides.length;
+  for (let h = 0; h < H; h++) {
+    const g = h < G ? k.guides[h] : guideVariant(R, k.guides[h % G]);
+    bladeDetails(k, heroBlade(k, g, h));
+  }
+  if (P.orbits) k.orbits(1, true);
+  if (P.sparks) {
+    const ns = R.int(1, 3);
+    for (let s = 0; s < ns; s++) { const [x, y] = freeSpot(k); k.spark(x, y, R.range(.05, .11), .5 + s * .08); }
+  }
+}
+
+const COMPOSERS = { filigree: composeFiligree, blades: composeBlades };
 
 /* ---------- assembly ---------- */
 const copiesOf = sym => sym === "none" ? 1 : sym === "mirror" ? 2 : 2 * +sym.slice(1);
