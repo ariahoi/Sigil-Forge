@@ -66,3 +66,20 @@ test("blades: extremes of curl and weight stay finite", () => {
     assert.ok(m.strokes.every(s => [...s.p, ...s.w].every(Number.isFinite)));
   }
 });
+
+// Signed area of the outline exactly as render.js traces it; mixed signs cancel under one nonzero fill.
+const outlineArea = s => {
+  const ring = [];
+  for (let i = 0; i < s.n; i++) ring.push([s.p[2 * i] + s.nx[i] * s.w[i] / 2, s.p[2 * i + 1] + s.ny[i] * s.w[i] / 2]);
+  for (let i = s.n - 1; i >= 0; i--) ring.push([s.p[2 * i] - s.nx[i] * s.w[i] / 2, s.p[2 * i + 1] - s.ny[i] * s.w[i] / 2]);
+  let a = 0;
+  for (let i = 0; i < ring.length; i++) { const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length]; a += x0 * y1 - x1 * y0; }
+  return a / 2;
+};
+test("spine strokes on the axis keep one winding with their mirror copies", () => {
+  for (const mode of MODES) for (const seed of SEEDS) {
+    const signs = G.build(seed, 0, { ...P0, mode }).strokes.filter(s => s.role === "spine").map(outlineArea).filter(a => Math.abs(a) > 1e-6).map(Math.sign);
+    assert.ok(signs.length > 0);
+    assert.ok(signs.every(v => v === signs[0]), `${mode} ${seed}`);
+  }
+});

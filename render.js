@@ -18,14 +18,14 @@ function trace(path, st, prog, c, k) {
   const last = st.n - 1;
   const m = prog >= 1 ? last : Math.floor(prog * last);
   if (m < 1) return;
-  const { p, nx, ny, w } = st, sg = st.flip ? -1 : 1;
+  const { p, nx, ny, w } = st;
   const head = i => prog >= 1 ? 1 : Math.min(1, (m - i) / 6);
   for (let i = 0; i <= m; i++) {
-    const h = w[i] * .5 * sg * head(i), x = c + (p[2 * i] + nx[i] * h) * k, y = c + (p[2 * i + 1] + ny[i] * h) * k;
+    const h = w[i] * .5 * head(i), x = c + (p[2 * i] + nx[i] * h) * k, y = c + (p[2 * i + 1] + ny[i] * h) * k;
     i ? path.lineTo(x, y) : path.moveTo(x, y);
   }
   for (let i = m; i >= 0; i--) {
-    const h = -w[i] * .5 * sg * head(i);
+    const h = -w[i] * .5 * head(i);
     path.lineTo(c + (p[2 * i] + nx[i] * h) * k, c + (p[2 * i + 1] + ny[i] * h) * k);
   }
   path.closePath();
@@ -61,9 +61,9 @@ function toSVG(model, P) {
   let d = "";
   const f = v => v.toFixed(1);
   for (const st of model.strokes) {
-    const { p, nx, ny, w, n } = st, sg = st.flip ? -1 : 1;
-    for (let i = 0; i < n; i++) { const h = w[i] * .5 * sg; d += (i ? "L" : "M") + f(c + (p[2 * i] + nx[i] * h) * k) + " " + f(c + (p[2 * i + 1] + ny[i] * h) * k); }
-    for (let i = n - 1; i >= 0; i--) { const h = -w[i] * .5 * sg; d += "L" + f(c + (p[2 * i] + nx[i] * h) * k) + " " + f(c + (p[2 * i + 1] + ny[i] * h) * k); }
+    const { p, nx, ny, w, n } = st;
+    for (let i = 0; i < n; i++) { const h = w[i] * .5; d += (i ? "L" : "M") + f(c + (p[2 * i] + nx[i] * h) * k) + " " + f(c + (p[2 * i + 1] + ny[i] * h) * k); }
+    for (let i = n - 1; i >= 0; i--) { const h = -w[i] * .5; d += "L" + f(c + (p[2 * i] + nx[i] * h) * k) + " " + f(c + (p[2 * i + 1] + ny[i] * h) * k); }
     d += "Z";
   }
   let defs = "", body = "";

@@ -423,7 +423,9 @@ function capMotif(motif, copies) {
 
 function applySymmetry(motif, sym) {
   if (sym === "none") return motif;
-  let all = motif.concat(motif.map(s => ({ ...s, flip: true, pts: s.pts.map(([x, y]) => [-x, y]) })));
+  // No winding fix-up is needed: prepare() recomputes normals from the mirrored points, which swaps the
+  // outline's sides and so keeps the original winding. Reversing it would cancel overlapping copies.
+  let all = motif.concat(motif.map(s => ({ ...s, pts: s.pts.map(([x, y]) => [-x, y]) })));
   if (sym[0] === "r") {
     const f = +sym.slice(1), res = [];
     for (let k = 0; k < f; k++) {
@@ -443,7 +445,7 @@ function prepare(st) {
     const dx = p[2 * b] - p[2 * a], dy = p[2 * b + 1] - p[2 * a + 1], l = Math.hypot(dx, dy) || 1;
     nx[i] = -dy / l; ny[i] = dx / l;
   }
-  return { n, p, nx, ny, w: Float32Array.from(st.ws), t0: st.t0, dur: Math.max(.05, st.dur), flip: !!st.flip,
+  return { n, p, nx, ny, w: Float32Array.from(st.ws), t0: st.t0, dur: Math.max(.05, st.dur),
            role: st.role, motif: st.motif };
 }
 
