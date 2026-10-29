@@ -186,18 +186,18 @@ function makeKit(R, D, P) {
       for (let b = 0; b < nb; b++) {
         const ti = D.range(.12, .7), i = Math.round(ti * n);
         k.tendril(D, pts[i][0], pts[i][1], angs[i] + D.sign() * D.range(.35, 1.15),
-                  len * D.range(.22, .5), ws[i] * D.range(.5, .85), depth + 1, t0 + dur * ti);
+                  len * D.range(.22, .5), ws[i] * .6, depth + 1, t0 + dur * ti);
       }
     }
-    const nt = Math.round(k.spikes * len * (depth ? 6 : 11) * D.range(.5, 1.3));
+    // barbs lean back 25–60° against the growth; short ones outnumber long ones
+    const nt = Math.min(12, Math.round(k.spikes * len * (depth ? 6 : 11) * D.range(.5, 1.3)));
     for (let q = 0; q < nt; q++) {
       const ti = D.range(.08, .85), i = Math.round(ti * n);
       if (ws[i] < .002) continue;
-      const side = D.sign(), back = D.chance(.18);
-      const a = angs[i] + (back ? Math.PI : 0) + side * (back ? -1 : 1) * D.range(.45, 1.0);
-      const L = ws[i] * D.range(1.6, 4.2) + .012;
+      const side = D.sign(), a = angs[i] + Math.PI - side * D.range(25, 60) * Math.PI / 180;
+      const L = .02 + .1 * D() ** 2;
       k.bent(pts[i][0], pts[i][1], pts[i][0] + Math.cos(a) * L, pts[i][1] + Math.sin(a) * L,
-             ws[i] * D.range(.75, 1.1), PROF.thorn, t0 + dur * ti, .12, 6, side * D.range(0, .22), "barb");
+             ws[i] * D.range(.75, 1.1), PROF.thorn, t0 + dur * ti, .12, 6, -side * D.range(0, .22), "barb");
     }
   };
 
@@ -261,33 +261,38 @@ function makeKit(R, D, P) {
 }
 
 /* ---------- composers ---------- */
+// The flow direction at (x, y): heading of the nearest guide at its nearest point.
+function flowAt(k, x, y) {
+  let best = null, bd = Infinity;
+  for (const g of k.guides) {
+    const t = g.nearest(x, y), [gx, gy] = g.at(t), d = (gx - x) ** 2 + (gy - y) ** 2;
+    if (d < bd) { bd = d; best = g.dir(t); }
+  }
+  return best;
+}
+
 function composeFiligree(k) {
   const { R, P } = k;
   if (P.spine && !k.free) k.spine();
+  heroBlade(k, k.guides[0], 0, [.03, .045]);   // the trunk the lace hangs from
 
-  // main tendrils
+  // main tendrils start along the flow, so neighbours run nearly parallel
   const N = k.main(P.density);
   for (let i = 0; i < N; i++) {
-    let x, y, a, len = R.range(.35, 1.0);
+    let x, y, len = R.range(.35, 1.0);
     const w = R.range(.016, .04) * k.wk, t0 = i * .06;
-    if (k.free) {
-      x = R.range(-.45, .45); y = R.range(-.6, .6); a = R.range(-Math.PI, Math.PI);
-    } else if (k.radial) {
-      x = R.range(0, .03); y = -R.range(.06, .6); a = -Math.PI / 2 + R.range(.15, Math.min(1.4, Math.PI / k.folds * 1.7)); len *= .65;
-    } else if (R.chance(.32)) {
-      x = R.range(.06, .38); y = R.range(-.5, .5); a = R.sign() * Math.PI / 2 + R.range(-.45, .45); len *= 1.15;
-    } else {
-      x = R.range(0, .05); y = R.range(-.78, .78); a = R.range(-1.25, 1.25);
-    }
-    k.tendril(R, x, y, a, len, w, 0, t0);
+    if (k.free) { x = R.range(-.45, .45); y = R.range(-.6, .6); }
+    else if (k.radial) { x = R.range(0, .03); y = -R.range(.06, .6); len *= .65; }
+    else if (R.chance(.32)) { x = R.range(.06, .38); y = R.range(-.5, .5); len *= 1.15; }
+    else { x = R.range(0, .05); y = R.range(-.78, .78); }
+    k.tendril(R, x, y, flowAt(k, x, y) + R.gauss() * k.chaos * .5, len, w, 0, t0);
   }
 
-  // hairlines: long thin strands that cut across the mass
-  const nh = R.int(1, 3);
+  // hairlines: long thin strands laid along the guides
+  const nh = R.int(3, 6);
   for (let i = 0; i < nh; i++) {
-    const x = k.free ? R.range(-.3, .3) : R.range(0, .2), y = k.radial ? -R.range(.1, .5) : R.range(-.4, .4);
-    const a = k.radial ? -Math.PI / 2 + R.range(.1, Math.PI / k.folds) : (k.free ? R.range(-Math.PI, Math.PI) : R.range(-1.4, 1.4));
-    k.tendril(R, x, y, a, R.range(.5, 1.1) * (k.radial ? .7 : 1), .0045 * k.wk * R.range(.7, 1.4), 2, .2 + i * .1,
+    const g = k.guides[i % k.guides.length], t = R.range(0, .6), [x, y] = g.at(t);
+    k.tendril(R, x, y, g.dir(t) + R.range(-.2, .2), R.range(.5, 1.1) * (k.radial ? .7 : 1), .0045 * k.wk * R.range(.7, 1.4), 2, .2 + i * .1,
               { prof: PROF.hair, chaos: k.chaos * .4, curl: k.curl * .5, bare: true });
   }
 
@@ -314,12 +319,12 @@ const outerSide = (pts, i, span = 5) => {
 };
 
 // One hero: a thick blade laid along a guide, built from R only.
-function heroBlade(k, guide, h) {
+function heroBlade(k, guide, h, [wLo, wHi] = [.05, .09]) {
   const { R } = k;
   const off = R.range(-.06, .06);
   const tA = R.range(0, .15), tB = R.range(.8, 1);
   const a1 = R.range(4, 9), a2 = R.range(9, 17), f1 = R.range(0, 6.28), f2 = R.range(0, 6.28);
-  const w = R.range(.05, .09) * k.wk;
+  const w = R.range(wLo, wHi) * k.wk;
   const pts = [], n = 70;
   for (let i = 0; i <= n; i++) {
     const t = tA + (tB - tA) * i / n, [x, y] = guide.at(t), nrm = guide.dir(t) + Math.PI / 2;

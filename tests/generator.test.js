@@ -83,3 +83,10 @@ test("spine strokes on the axis keep one winding with their mirror copies", () =
     assert.ok(signs.every(v => v === signs[0]), `${mode} ${seed}`);
   }
 });
+
+test("filigree: one trunk hero per half in mirror", () => {
+  for (const seed of SEEDS) {
+    const m = G.build(seed, 0, { ...P0, mode: "filigree" });
+    assert.equal(m.strokes.filter(s => s.role === "hero").length, 2);
+  }
+});
