@@ -2,12 +2,15 @@
 (() => {
 "use strict";
 
-const { build, newSeed, sanitizeParams, DEFAULTS, RANGES } = SigilGen;
+const { build, newSeed, sanitizeParams, heroCount, DEFAULTS, RANGES } = SigilGen;
 const { STYLES, paint, toSVG } = SigilRender;
 
+const MODES = [["blades","Лезвия"],["filigree","Филигрань"]];
 const SYMS = [["mirror","Зеркало"],["r3","×3"],["r4","×4"],["r5","×5"],["r6","×6"],["r8","×8"],["none","Нет"]];
+// In blades mode the density slider picks how many heroes a half gets (2–5), so it reads differently.
+const densityLabel = () => P.mode === "blades" ? "Главные штрихи" : "Плотность";
 const SLIDERS = [
-  ["density", "Плотность", 1, v => v],
+  ["density", "Плотность", 1, v => P.mode === "blades" ? heroCount(v) : v],
   ["spikes",  "Шипы",      1, v => v + "%"],
   ["curl",    "Завитки",   1, v => v + "%"],
   ["chaos",   "Хаос",      1, v => v + "%"],
@@ -49,8 +52,8 @@ const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 
 function updateReadout() {
   $("#readout").innerHTML = `seed <b>${seed}</b> · вариант <b>${variant}</b>`;
   $("#seedIn").value = seed;
-  const n = model.strokes.length, sym = SYMS.find(s => s[0] === P.sym)[1];
-  $("#stats").textContent = `${n} ${plural(n, "штрих", "штриха", "штрихов")} · симметрия ${sym.toLowerCase()} · ${STYLES[P.style].name.toLowerCase()}`;
+  const n = model.strokes.length, sym = SYMS.find(s => s[0] === P.sym)[1], mode = MODES.find(m => m[0] === P.mode)[1];
+  $("#stats").textContent = `${n} ${plural(n, "штрих", "штриха", "штрихов")} · ${mode.toLowerCase()} · ${sym.toLowerCase()} · ${STYLES[P.style].name.toLowerCase()}`;
   frame.classList.toggle("transparent", P.transparent);
 }
 
@@ -109,10 +112,11 @@ function chipGroup(box, items, key, swatch) {
       b.appendChild(sw);
     }
     b.appendChild(document.createTextNode(label));
-    b.addEventListener("click", () => { P[key] = val; persist(); syncControls(); onParam(key === "sym"); });
+    b.addEventListener("click", () => { P[key] = val; persist(); syncControls(); onParam(key === "sym" || key === "mode"); });
     box.appendChild(b);
   }
 }
+chipGroup($("#modeChips"), MODES, "mode");
 chipGroup($("#symChips"), SYMS, "sym");
 chipGroup($("#styleChips"), Object.entries(STYLES).map(([k, s]) => [k, s.name]), "style", v => STYLES[v].sw);
 
@@ -134,6 +138,8 @@ for (const [id, key] of Object.entries(TOGGLES)) {
 function syncControls() {
   for (const [key, , , fmt] of SLIDERS) { $("#s-" + key).value = P[key]; $("#o-" + key).textContent = fmt(P[key]); }
   for (const [id, key] of Object.entries(TOGGLES)) $("#" + id).checked = !!P[key];
+  $('label[for="s-density"]').textContent = densityLabel();
+  document.querySelectorAll("#modeChips .chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.val === P.mode));
   document.querySelectorAll("#symChips .chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.val === P.sym));
   document.querySelectorAll("#styleChips .chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.val === P.style));
 }
