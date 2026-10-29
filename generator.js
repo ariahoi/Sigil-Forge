@@ -87,10 +87,23 @@ function makeGuide(p0, p1, p2, p3) {
   return { at, dir, nearest, cps: [p0, p1, p2, p3] };
 }
 
-// A sibling of a guide: same shape family, scaled about its start, shifted and sometimes flipped vertically.
-function guideVariant(R, g) {
-  const [o] = g.cps, s = R.range(.7, 1.25), dy = R.sign() * R.range(.2, .45), flip = R.chance(.4) ? -1 : 1;
-  return makeGuide(...g.cps.map(([x, y]) => [o[0] + (x - o[0]) * s, o[1] + dy + flip * (y - o[1]) * s]));
+// Guides keep their control points inside GUIDE_R; a Bézier stays in the hull of its control points,
+// so the blades laid along it leave room for their width, hooks and echoes inside the frame.
+const GUIDE_R = .72;
+const clampR = ([x, y], r = GUIDE_R) => { const d = Math.hypot(x, y); return d > r ? [x * r / d, y * r / d] : [x, y]; };
+
+// A sibling of a guide. Mirror and free: scaled about its start, shifted and sometimes flipped vertically.
+// Radial: scaled and turned about the centre, never past the half-sector the motif lives in.
+function guideVariant(k, g) {
+  const { R } = k, s = R.range(.75, 1.1);
+  if (k.radial) {
+    const span = Math.PI / k.folds, phis = g.cps.slice(1).map(([x, y]) => Math.atan2(x, -y));
+    const lo = -Math.min(...phis), hi = span - Math.max(...phis);
+    const d = lo <= hi ? R.range(lo, hi) : (lo + hi) / 2, c = Math.cos(d), sn = Math.sin(d);
+    return makeGuide(...g.cps.map(([x, y]) => clampR([(x * c - y * sn) * s, (x * sn + y * c) * s])));
+  }
+  const [o] = g.cps, dy = R.sign() * R.range(.2, .45), flip = R.chance(.4) ? -1 : 1;
+  return makeGuide(...g.cps.map(([x, y]) => clampR([o[0] + (x - o[0]) * s, o[1] + dy + flip * (y - o[1]) * s])));
 }
 
 function makeGuides(k) {
@@ -116,7 +129,7 @@ function makeGuides(k) {
       p1 = [p0[0] + R.range(.1, .35), p0[1] - up * R.range(.1, .35)];
       p2 = type === "loop" ? [R.range(0, .15), p3[1] + R.range(-.3, .3)] : [p3[0] - R.range(0, .25), p3[1] - up * R.range(.15, .4)];
     }
-    out.push(makeGuide(p0, p1, p2, p3));
+    out.push(makeGuide(...[p0, p1, p2, p3].map(p => clampR(p))));
   }
   return out;
 }
@@ -139,6 +152,15 @@ function makeKit(R, D, P) {
     return raw;
   };
   k.main = N => k.radial ? Math.max(1, Math.round(N * 2 / k.folds)) : N;
+  // Builds a layer even when it is switched off and then drops its strokes, so R is consumed
+  // the same way and toggling «Хребет» or «Орбиты» leaves the rest of the sigil in place.
+  k.layer = (on, build) => {
+    if (on) return build();
+    const out = k.out, counter = k.counter;
+    k.out = []; k.counter = { ...counter };
+    build();
+    k.out = out; k.counter = counter;
+  };
 
   k.bent = (x0, y0, x1, y1, w, prof, t0, dur, n, bend, role = "detail") => {
     const mx = (x0 + x1) / 2 - (y1 - y0) * bend, my = (y0 + y1) / 2 + (x1 - x0) * bend;
@@ -273,7 +295,7 @@ function flowAt(k, x, y) {
 
 function composeFiligree(k) {
   const { R, P } = k;
-  if (P.spine && !k.free) k.spine();
+  k.layer(P.spine && !k.free, () => k.spine());
   heroBlade(k, k.guides[0], 0, [.03, .045]);   // the trunk the lace hangs from
 
   // main tendrils start along the flow, so neighbours run nearly parallel
@@ -296,15 +318,15 @@ function composeFiligree(k) {
               { prof: PROF.hair, chaos: k.chaos * .4, curl: k.curl * .5, bare: true });
   }
 
-  if (P.orbits) k.orbits(R.int(1, 2));
-  if (P.sparks) {
+  k.layer(P.orbits, () => k.orbits(R.int(1, 2)));
+  k.layer(P.sparks, () => {
     const ns = R.int(2, 6);
     for (let s = 0; s < ns; s++) {
       const [x, y] = k.spot(.25, .88);
       if (Math.hypot(x, y) > .92) continue;
       k.spark(x, y, R.range(.025, .085), .4 + s * .07);
     }
-  }
+  });
 }
 
 // Direction of the polyline at i and the side (+1 / −1 along the left normal) facing away from its bend.
@@ -379,12 +401,13 @@ function bladeDetails(k, hero) {
 }
 
 // The emptiest of 12 candidate spots, measured against every point placed so far.
+// Candidates stay within r .78, so a spark of up to .11 still ends inside the frame.
 function freeSpot(k) {
   const probe = [];
   for (const s of k.out) for (let i = 0; i < s.pts.length; i += 4) probe.push(s.pts[i]);
   let best = null, bestD = -1;
   for (let c = 0; c < 12; c++) {
-    const [x, y] = k.spot(.2, .88);
+    const [x, y] = clampR(k.spot(.2, .78), .78);
     let d = Infinity;
     for (const [px, py] of probe) d = Math.min(d, (px - x) ** 2 + (py - y) ** 2);
     if (d > bestD) { bestD = d; best = [x, y]; }
@@ -394,17 +417,17 @@ function freeSpot(k) {
 
 function composeBlades(k) {
   const { R, P } = k;
-  if (P.spine && !k.free) k.spine(R.range(.035, .05) * k.wk, 1);
+  k.layer(P.spine && !k.free, () => k.spine(R.range(.035, .05) * k.wk, 1));
   const H = k.main(heroCount(P.density)), G = k.guides.length;
   for (let h = 0; h < H; h++) {
-    const g = h < G ? k.guides[h] : guideVariant(R, k.guides[h % G]);
+    const g = h < G ? k.guides[h] : guideVariant(k, k.guides[h % G]);
     bladeDetails(k, heroBlade(k, g, h));
   }
-  if (P.orbits) k.orbits(1, true);
-  if (P.sparks) {
+  k.layer(P.orbits, () => k.orbits(1, true));
+  k.layer(P.sparks, () => {
     const ns = R.int(1, 3);
     for (let s = 0; s < ns; s++) { const [x, y] = freeSpot(k); k.spark(x, y, R.range(.05, .11), .5 + s * .08); }
-  }
+  });
 }
 
 const COMPOSERS = { filigree: composeFiligree, blades: composeBlades };

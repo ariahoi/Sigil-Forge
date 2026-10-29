@@ -90,3 +90,42 @@ test("filigree: one trunk hero per half in mirror", () => {
     assert.equal(m.strokes.filter(s => s.role === "hero").length, 2);
   }
 });
+
+// Heroes of the original motif (before mirroring and rotation), in unscaled motif coordinates.
+const heroPts = m => {
+  const firstIdx = new Set(), out = [];
+  for (const s of m.strokes) {
+    if (s.role !== "hero" || firstIdx.has(s.motif)) continue;
+    firstIdx.add(s.motif);
+    for (let i = 0; i < s.n; i++) out.push([s.p[2 * i] / m.scale, s.p[2 * i + 1] / m.scale]);
+  }
+  return out;
+};
+const SEEDS60 = Array.from({ length: 60 }, (_, i) => "FIT-" + i);
+
+test("blades fill the frame: median fit scale at default params is at least 0.9", () => {
+  for (const sym of ["mirror", "r6"]) {
+    const sc = SEEDS60.map(s => G.build(s, 0, { ...P0, mode: "blades", sym }).scale).sort((a, b) => a - b);
+    assert.ok(sc[30] >= .9, `${sym}: median scale ${sc[30].toFixed(2)}`);
+  }
+});
+test("radial heroes stay inside their half-sector", () => {
+  for (const sym of ["r3", "r6", "r8"]) {
+    const span = Math.PI / +sym.slice(1);
+    let far = 0, total = 0;
+    for (const seed of SEEDS60) for (const [x, y] of heroPts(G.build(seed, 0, { ...P0, mode: "blades", sym, density: 16 }))) {
+      if (Math.hypot(x, y) < .25) continue;   // near the centre a small offset is a large angle
+      const phi = Math.atan2(x, -y);
+      total++;
+      if (phi < -.2 || phi > span + .2) far++;
+    }
+    assert.ok(far / total < .03, `${sym}: ${(100 * far / total).toFixed(1)}% of hero points outside the half-sector`);
+  }
+});
+test("layer toggles do not reshape the heroes", () => {
+  for (const seed of SEEDS60.slice(0, 20)) for (const key of ["spine", "orbits"]) {
+    const on = heroPts(G.build(seed, 0, { ...P0, mode: "blades" })), off = heroPts(G.build(seed, 0, { ...P0, mode: "blades", [key]: false }));
+    assert.equal(on.length, off.length, `${seed} ${key}`);
+    on.forEach(([x, y], i) => assert.ok(Math.abs(x - off[i][0]) < 1e-4 && Math.abs(y - off[i][1]) < 1e-4, `${seed} ${key}`));
+  }
+});
